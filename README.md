@@ -24,7 +24,8 @@ Models were compared using:
 ## Structure
 project-analysis/
 ├── README.md
-├── scripts/
+├── Final Project (R project for reproducing plots and figures in the final report.)
+├── Individuals' Work
 
 ## Contributors
 - EDA: Sylvia Yin (with additional plots contributed by Eileen Yu and Jianyue (Evelyn) Bai)
