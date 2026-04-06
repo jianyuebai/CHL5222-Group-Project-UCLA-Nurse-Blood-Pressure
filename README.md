@@ -34,3 +34,4 @@ project-analysis/
 - Slides: Xiankai Yang
 - Report writing: Introduction (Jianyue (Evelyn) Bai), Methods (2.1-2.4: Sylvia Yin; 2.5: Eileen Yu), Results (Eileen Yu), Discussion (Xiankai Yang & Ente Kang), Future Work (Ente Kang & Xiankai Yang)
 - Overall quality assurance: Eileen Yu & Xiankai Yang
+- R Project and Code Finalization: Eileen Yu, Ente Kang, & Sylvia Yin
