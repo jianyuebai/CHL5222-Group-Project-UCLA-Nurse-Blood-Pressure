@@ -23,9 +23,8 @@ Models were compared using:
 
 ## Structure
 project-analysis/
-├── scripts/
-├── data/
 ├── README.md
+├── scripts/
 
 ## Contributors
 - EDA: Sylvia Yin (with contributions from Eileen Yu and Jianyue (Evelyn) Bai)
