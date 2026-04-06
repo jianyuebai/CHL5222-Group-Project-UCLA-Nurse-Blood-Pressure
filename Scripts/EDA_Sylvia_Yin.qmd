@@ -1,0 +1,349 @@
+---
+title: "Final Project"
+format: pdf
+editor: visual
+---
+---
+title: "Final Project"
+format: pdf
+editor: visual
+---
+
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(here)
+library(tidyverse)
+library(tinytex)
+library(PupillometryR)
+library(nlme)
+library(car)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+library(splines)
+library(lme4)
+library(mice)
+library(reshape2)
+library(grid)
+library(gridExtra)
+knitr::opts_knit$set(root.dir = here())
+#knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+theme_set(theme_bw(base_size = 20)) # Use black/white theme and increase font size for all ggplot figures
+```
+
+```{r}
+
+nursebp<-read.csv("nursebp.csv")
+
+## descriptive statistics
+str(nursebp)
+length(unique(nursebp$SNUM))
+
+nursebp<-nursebp %>% 
+  mutate(
+    SNUM=factor(SNUM),
+    DAY=factor(DAY),
+    PHASE=factor(PHASE),
+    POSTURE=trimws(POSTURE)
+  )
+
+nursebp$POSTURE[nursebp$POSTURE == ""] <- NA
+
+```
+
+*Baseline Characteristics*
+
+```{r}
+posture_prop <- nursebp %>%
+  mutate(POSTURE = na_if(POSTURE, "")) %>%
+  filter(!is.na(POSTURE)) %>%
+  group_by(SNUM, POSTURE) %>%
+  summarise(n_posture = n(), .groups = "drop") %>%
+  group_by(SNUM) %>%
+  mutate(prop = n_posture / sum(n_posture)) %>%
+  ungroup() %>%
+  select(SNUM, POSTURE, prop) %>%
+  pivot_wider(
+    names_from = POSTURE,
+    values_from = prop,
+    names_prefix = "prop_",
+    values_fill = 0
+  )
+
+
+nurse_subject <- nursebp %>%
+    group_by(SNUM) %>%
+    summarise(
+        AGE = first(AGE),
+        FH123 = first(FH123),
+        PHASE = first(PHASE),
+        DAY = first(DAY),
+        POSTURE=first(POSTURE),
+        mean_SYS = mean(SYS, na.rm = TRUE),
+        mean_DIA = mean(DIA, na.rm = TRUE),
+        mean_HRT = mean(HRT, na.rm = TRUE),
+        mean_MNACT5 = mean(MNACT5, na.rm = TRUE),
+        mean_STR = mean(STR, na.rm = TRUE),
+        mean_HAP = mean(HAP, na.rm = TRUE),
+        mean_TIR = mean(TIR, na.rm = TRUE),
+        .groups = "drop"
+    ) %>%
+  left_join(posture_prop, by = "SNUM")
+
+nurse_subject <-nurse_subject%>%
+    mutate(
+        SYS_group = case_when(
+            mean_SYS < 115 ~ "Low (<115)",
+            mean_SYS < 125 ~ "Medium (115–125)",
+            TRUE ~ "High (≥125)"
+        ),
+        SYS_group = factor(SYS_group,
+                           levels = c("Low (<115)", "Medium (115–125)", "High (≥125)")
+        )
+    ) %>% 
+    mutate(
+    prop_RECLINE = coalesce(prop_RECLINE, 0),
+    prop_SIT = coalesce(prop_SIT, 0),
+    prop_STAND = coalesce(prop_STAND, 0)
+  )
+
+
+library(gtsummary)
+
+tbl_sys <- nurse_subject %>%
+    select(
+        SYS_group,
+        AGE, FH123, PHASE, DAY,
+        mean_DIA, mean_HRT,
+        mean_MNACT5, mean_STR, mean_HAP, mean_TIR,prop_RECLINE, prop_SIT, prop_STAND
+    ) %>%
+    tbl_summary(
+        by = SYS_group,
+        missing = "ifany",
+        missing_text = "Missing n (%)",
+        statistic = list(
+            all_continuous() ~ "{mean} ({sd})",
+            all_categorical() ~ "{n} ({p}%)"
+        ),
+        digits = all_continuous() ~ 1,
+        label = list(
+            AGE ~ "Age (Years)",
+            FH123 ~ "Family History",
+            PHASE ~ "Phase",
+            DAY ~ "Work / Non-Work Day",
+            mean_DIA ~ "Mean Diastolic BP",
+            mean_HRT ~ "Mean Heart Rate",
+            mean_MNACT5 ~ "Mean Activity",
+            mean_STR ~ "Mean Stress",
+            mean_HAP ~ "Mean Happiness",
+            mean_TIR ~ "Mean Tiredness",
+            prop_RECLINE ~ "% Time Recline",
+            prop_SIT ~ "% Time Sit",
+            prop_STAND ~ "% Time Stand"
+        )
+    ) %>%
+    add_p(test= list(all_continuous() ~ "aov",
+                     all_categorical() ~ "chisq.test" )) %>%
+    add_overall() %>%
+    bold_labels()
+
+tbl_sys
+```
+
+
+
+*Exploratory longitudinal plots*
+```{r}
+
+#check in-between subject effect
+subject_mean <- nursebp %>%
+    group_by(SNUM) %>%
+    summarise(mean_SYS = mean(SYS, na.rm = TRUE))
+
+p1<-ggplot(subject_mean, aes(mean_SYS)) +
+    geom_histogram(binwidth = 5, fill = "lightblue", color = "black") +
+    labs(x = "Mean SYS per Subject")
+
+
+#trajectory samples data
+set.seed(123)
+sample_ids <- sample(unique(dat_gls$SNUM), 20)
+
+p2<-ggplot(dat_gls[dat_gls$SNUM %in% sample_ids, ],
+       aes(x = time, y = SYS, group = SNUM)) +
+  geom_line() +
+  labs(title = "Sample Trajectories of SYS") +
+  theme_minimal()
+
+
+
+#population trend vs time from midnight
+
+p3<-ggplot(nursebp, aes(x = time, y = SYS)) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(
+    title = "Smoothed Trend of Systolic Blood Pressure",
+    x = "Time (minutes from midnight)",
+    y = "SYS"
+  ) +
+  theme_minimal()
+
+
+(p1|p2|p3)
+
+```
+
+*Correlation Matrix*
+```{r}
+num_data <- nurse_subject %>%
+  select(
+    mean_SYS,
+    mean_DIA,
+    mean_HRT,
+    mean_MNACT5,
+    mean_STR,
+    mean_HAP,
+    mean_TIR,
+    AGE,
+    prop_RECLINE,
+    prop_SIT,
+    prop_STAND
+  )
+cor_matrix <- cor(num_data, use = "complete.obs")
+
+round(cor_matrix, 2)
+
+cor_df <- melt(cor_matrix)
+
+ggplot(cor_df, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 2)), size = 3) +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  labs(title = "Correlation Matrix")
+
+```
+
+
+
+*Missing Data Pattern Plot*
+
+```{r}
+#Missing data pattern
+colSums(is.na(nursebp))
+
+sys_wide <- nursebp %>%
+    select(SNUM, timept, SYS) %>%
+    pivot_wider(
+        names_from = timept,
+        names_prefix = "T",
+        values_from = SYS
+    )
+
+p4<-sys_wide %>%
+    select(-SNUM) %>%
+    md.pattern()
+
+```
+
+
+*A comparison between retained and excluded observations*
+```{r}
+#complete cases
+
+vars <- c("SNUM","SYS","time","HRT","MNACT5","PHASE","AGE","FH123", "STR", "HAP", "TIR", "DAY", "POSTURE")
+
+dat_gls <- nursebp[complete.cases(nursebp[, vars]), ]
+
+#After excluding observations with missing values in key predictors, 7877 out of 9573 observations (82.3%) were retained.
+
+nursebp$kept <- ifelse(
+    !is.na(nursebp$STR) &
+        !is.na(nursebp$TIR) &
+        !is.na(nursebp$HAP) &
+        !is.na(nursebp$MNACT5)&
+        !is.na(nursebp$POSTURE),
+    "Kept", "Removed"
+)
+
+nursebp %>%
+    group_by(kept) %>%
+    summarise(
+        SYS_mean = mean(SYS, na.rm = TRUE),
+        HRT_mean = mean(HRT, na.rm = TRUE),
+        AGE_mean = mean(AGE, na.rm = TRUE)
+    )
+
+tab <- table(nursebp$FH123, nursebp$kept)
+
+# Column % (inside Kept / Removed) FH123
+pct_col <- round(prop.table(tab, margin = 2) * 100, 1)
+
+# Row % (Removed rate)
+pct_removed <- round(tab[, "Removed"] / rowSums(tab) * 100, 1)
+
+# Combine everything
+result_fh <- data.frame(
+  FH123 = rownames(tab),
+  Kept = paste0(tab[, "Kept"], " (", pct_col[, "Kept"], "%)"),
+  Removed = paste0(tab[, "Removed"], " (", pct_col[, "Removed"], "%)"),
+  `% Removed` = paste0(pct_removed, "%")
+)
+
+result_fh
+
+# Day
+
+tab_day <- table(nursebp$DAY, nursebp$kept)
+
+# Column % (inside Kept / Removed)
+pct_col <- round(prop.table(tab_day, margin = 2) * 100, 1)
+
+# Row % (% Removed within each DAY group)
+pct_removed <- round(tab_day[, "Removed"] / rowSums(tab_day) * 100, 1)
+
+# Combine
+result_day <- data.frame(
+  DAY = rownames(tab_day),
+  Kept = paste0(tab_day[, "Kept"], " (", pct_col[, "Kept"], "%)"),
+  Removed = paste0(tab_day[, "Removed"], " (", pct_col[, "Removed"], "%)"),
+  `% Removed` = paste0(pct_removed, "%")
+)
+
+result_day
+
+p_result_day<-wrap_elements(tableGrob(result_day))
+
+p_result_fh<-wrap_elements(tableGrob(result_fh))
+
+p_sys<-ggplot(nursebp, aes(x = kept, y = SYS)) +
+    geom_boxplot(fill = "lightblue") +
+    labs(title = "SYS: Kept vs Removed") +
+    theme_minimal()
+
+p_hrt <- ggplot(nursebp, aes(x = kept, y = HRT, fill = kept)) +
+  geom_boxplot() +
+  labs(title = "HRT: Kept vs Removed", x = NULL, y = "Heart Rate") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p_age <- ggplot(nursebp, aes(x = kept, y = AGE, fill = kept)) +
+  geom_boxplot() +
+  labs(title = "AGE: Kept vs Removed", x = NULL, y = "Age") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+(p_sys|p_hrt|p_age) /
+     (p_result_day |p_result_fh)
+```
+
+
+
+
+
+
+
+

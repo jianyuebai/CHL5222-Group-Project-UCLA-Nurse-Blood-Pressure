@@ -1,0 +1,544 @@
+---
+title: "Correlated_Group_Project"
+format: html
+editor: visual
+---
+
+```{r}
+df <- read.csv('nursebp.csv')
+colnames(df)
+```
+
+```{r}
+df$SNUM <- factor(df$SNUM)
+df$SYS <- as.numeric(df$SYS)
+df$DIA <- as.numeric(df$DIA)
+df$HRT <- as.numeric(df$HRT)
+df$MNACT5 <- as.numeric(df$MNACT5)
+df$PHASE <- factor(df$PHASE)
+df$DAY <- factor(df$DAY)
+df$POSTURE <- factor(df$POSTURE)
+df$STR <- factor(df$STR)
+df$HAP <- factor(df$HAP)
+df$TIR <-factor(df$TIR)
+df$AGE <- as.numeric(df$AGE)
+df$FH123 <-factor(df$FH123)
+df$time <- as.numeric(df$time)
+df$timepass <- as.numeric(df$timepass)
+df$timept <- factor(df$timept)
+
+# Convert all empty strings and single spaces to true NA
+df[df == "" | df == " "] <- NA
+```
+
+## **Missing Pattern**
+
+```{r}
+library(naniar)
+
+# Visualizes where the NAs are across your variables
+vis_miss(df)
+
+# Shows the intersection of missingness (e.g., who is missing both SYS and HRT?)
+gg_miss_upset(df)
+```
+
+Eileen: logistic regression to assess . not MCAR. it is MAR.
+
+## **Systolic Blood Pressure (SYS) Over Time**
+
+```{r}
+library(ggplot2)
+
+ggplot(df, aes(x = time, y = SYS, group = SNUM, color = as.factor(SNUM))) +
+  geom_line(alpha = 0.4) +
+  # Adding a trend line to see the 'average' minute-by-minute change
+  geom_smooth(aes(group = 1), method = "gam", color = "black", size = 1.2) +
+  labs(title = "SYS Change Over Minutes",
+       x = "Minutes (from midnight/baseline)",
+       y = "Systolic BP") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Distribution of SYS by Categorical Predictors (Violin Plots)
+
+```{r}
+library(ggplot2)
+
+# 1. Identify categorical columns (excluding SNUM/ID and the target SYS)
+# Adjust the 'setdiff' list to exclude any columns you don't want to plot
+cat_vars <- names(df)[sapply(df, function(x) is.factor(x) || is.character(x))]
+cat_vars <- setdiff(cat_vars, c("SNUM", "ID")) 
+
+# 2. Loop through and create plots
+for (var in cat_vars) {
+  
+  p <- ggplot(df, aes(x = .data[[var]], y = SYS, fill = .data[[var]])) +
+    geom_violin(trim = FALSE, alpha = 0.7) +
+    geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Adds a mini-boxplot inside
+    labs(title = paste("Distribution of SYS by", var),
+         x = var,
+         y = "Systolic BP") + 
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  print(p)
+}
+```
+
+## Distribution of SYS by Continuous Predictors (Violin Plots)
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# 1. Identify Numeric Predictors (excluding your outcome and IDs)
+num_vars <- names(df)[sapply(df, is.numeric)]
+num_vars <- setdiff(num_vars, c("SYS", "SNUM"))
+
+# 2. Create a temporary plotting dataframe
+df_plot <- df
+
+# 3. Bin numeric variables and plot
+for (num_var in num_vars) {
+  
+  # Create 4 bins based on quantiles
+  # We use factor() to ensure the plot treats them as categories
+  df_plot[[paste0(num_var, "_binned")]] <- factor(
+    ntile(df_plot[[num_var]], 8), 
+    labels = c("Q1 (Lowest)", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8")
+  )
+  
+  # Define the new binned variable name
+  current_var <- paste0(num_var, "_binned")
+  
+  # Remove NAs for the specific variable being plotted
+  plot_data <- df_plot[!is.na(df_plot[[current_var]]), ]
+  
+  # Generate the plot
+  p <- ggplot(plot_data, aes(x = .data[[current_var]], y = SYS, fill = .data[[current_var]])) +
+    geom_violin(trim = FALSE, alpha = 0.6) +
+    geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) +
+    scale_fill_brewer(palette = "Blues") + # Clean blue color scale
+    labs(title = paste("SYS Distribution by", num_var, "(Binned)"),
+         subtitle = "Variable split into equal-sized quartiles",
+         x = paste(num_var, "Quartiles"),
+         y = "Systolic BP") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  print(p)
+}
+```
+
+Eileen: DIA is too strongly correlated with SYS. So perhaps delete it from predictor variables.
+
+## **Collinearity Matrix of Predictors**
+
+```{r}
+library(corrplot)
+library(dplyr)
+
+# 1. Prepare the data
+# Ensure categories are factors and self-ratings are numeric
+df_test <- df %>%
+  mutate(
+    # Convert mood/stress to numeric if they aren't already
+    across(c(STR, HAP, TIR), ~as.numeric(as.character(.))),
+    # Ensure categorical variables are factors
+    across(c(PHASE, POSTURE, DAY), as.factor)
+  ) 
+
+# 2. Expand Factors into Dummy Variables (0/1)
+# model.matrix creates a column for each level (e.g., POSTUREStanding, POSTUREReclining)
+# we remove the intercept [,-1]
+options(na.action='na.pass') # Allow model.matrix to keep rows with NAs
+
+meta_matrix <- model.matrix(~ 1 + STR + HAP + TIR + MNACT5 + AGE + time + 
+                              PHASE + POSTURE + DAY + FH123 + DIA + HRT, 
+                            data = df_test)
+
+meta_matrix <- meta_matrix[, colnames(meta_matrix) != "(Intercept)"]
+
+# 3. Generate Correlation Matrix
+# This now includes specific levels like PHASEL and POSTUREStanding
+cor_matrix_full <- cor(meta_matrix, use = "pairwise.complete.obs")
+
+# 4. Plot with adjusted labels for a larger matrix
+corrplot(cor_matrix_full, 
+         method = "color", 
+         addCoef.col = "black", 
+         number.cex = 0.6,    # Smaller numbers to fit
+         tl.cex = 0.7,        # Smaller text labels
+         tl.col = "black",
+         title = "Full Predictor Collinearity Check (Numeric & Dummy)",
+         mar = c(0,0,1,0))
+
+```
+
+## **Interaction Effects Check**
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+# 1. Setup Theme and Palette
+clean_theme <- theme_minimal(base_size = 9) + 
+               theme(panel.grid.minor = element_blank(),
+                     legend.title = element_text(face = "bold", size = 7),
+                     legend.text = element_text(size = 6),
+                     plot.title = element_text(size = 9, face = "bold"),
+                     axis.title = element_text(size = 8))
+
+# 5-level warm palette for Stress (Yellow to Dark Red)
+warm_5 <- c("1" = "#ffffb2", "2" = "#fecc5c", "3" = "#fd8d3c", "4" = "#f03b20", "5" = "#bd0026")
+
+l_width <- 0.6 
+p_size  <- 1.2
+
+# --- 1. POSTURE * AGE (Binned Age) ---
+p1 <- ggplot(df, aes(x = POSTURE, y = SYS, color = cut_number(AGE, 3), group = cut_number(AGE, 3))) +
+  stat_summary(fun = mean, geom = "point", size = p_size) +
+  stat_summary(fun = mean, geom = "line", linewidth = l_width) +
+  scale_color_brewer(palette = "YlOrRd", name = "Age Group") +
+  labs(title = "Postural BP x Age", x = "Posture", y = "SYS") +
+  clean_theme
+
+# --- 2. STR * TIME (Time-Varying Recovery) ---
+# Switched to GAM to see non-linear recovery curves across all 5 STR levels
+p2 <- ggplot(df, aes(x = time, y = SYS, color = STR)) +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = FALSE, linewidth = l_width) +
+  scale_color_manual(values = warm_5, name = "Stress (1-5)") +
+  labs(title = "Time x Stress", x = "Minutes", y = "SYS") +
+  clean_theme
+
+# --- 3. STR * HAP (5-level Stress) ---
+p3 <- ggplot(df, aes(x = STR, y = SYS, color = HAP, group = HAP)) +
+  stat_summary(fun = mean, geom = "point", size = p_size) +
+  stat_summary(fun = mean, geom = "line", linewidth = l_width) +
+  scale_color_brewer(palette = "Greens", name = "Happiness") +
+  labs(title = "Buffering: Stress x Happiness", x = "Stress Level", y = "SYS") +
+  clean_theme
+
+# --- 4. TIR * MNACT5 (Activity Interaction) ---
+p4 <- ggplot(df, aes(x = TIR, y = SYS, color = cut_number(MNACT5, 2), group = cut_number(MNACT5, 2))) +
+  stat_summary(fun = mean, geom = "point", size = p_size) +
+  stat_summary(fun = mean, geom = "line", linewidth = l_width) +
+  scale_color_manual(values = c("#74a9cf", "#ce1256"), name = "Activity") +
+  labs(title = "Tiredness x Activity", x = "Tiredness", y = "SYS") +
+  clean_theme
+
+# --- 5. PHASE * STR (Hormonal Stress Reactivity) ---
+p5 <- ggplot(df, aes(x = STR, y = SYS, color = PHASE, group = PHASE)) +
+  stat_summary(fun = mean, geom = "point", size = p_size) +
+  stat_summary(fun = mean, geom = "line", linewidth = l_width) +
+  # Using distinct colors for Follicular and Luteal phases
+  scale_color_manual(values = c("F" = "#66c2a5", "L" = "#fc8d62"), 
+                     name = "Menstrual Phase",
+                     labels = c("F" = "Follicular", "L" = "Luteal")) +
+  labs(title = "Stress Reactivity by Menstrual Phase", 
+       x = "Stress Level", 
+       y = "SYS") +
+  clean_theme +
+  guides(color = guide_legend(override.aes = list(linewidth = 1)))
+
+# Combine
+(p1 | p2) / (p3 | p4) / p5
+```
+
+## Standardization of Continuous Variables
+
+```{r}
+library(dplyr)
+
+df_test <- df_test %>%
+  mutate(
+    # This z-scores all numeric columns EXCEPT snum and time
+    across(
+      .cols = where(is.numeric) & !c(SNUM), 
+      .fns = ~ as.numeric(scale(.)),
+      .names = "{.col}_z"  # This creates new names like AGE_z, SYS_z, etc.
+    )
+  )
+
+df_test$SNUM <- factor(df_test$SNUM)
+df_test$SYS <- as.numeric(df_test$SYS)
+df_test$DIA <- as.numeric(df_test$DIA)
+df_test$HRT <- as.numeric(df_test$HRT)
+df_test$MNACT5 <- as.numeric(df_test$MNACT5)
+df_test$PHASE <- factor(df_test$PHASE)
+df_test$DAY <- factor(df_test$DAY)
+df_test$POSTURE <- factor(df_test$POSTURE)
+df_test$STR <- factor(df_test$STR)
+df_test$HAP <- factor(df_test$HAP)
+df_test$TIR <-factor(df_test$TIR)
+df_test$AGE <- as.numeric(df_test$AGE)
+df_test$FH123 <-factor(df_test$FH123)
+df_test$time <- as.numeric(df_test$time)
+df_test$timepass <- as.numeric(df_test$timepass)
+df_test$timept <- factor(df_test$timept)
+
+df_test$SNUM <- factor(df_test$SNUM)
+df_test$SYS_z <- as.numeric(df_test$SYS_z)
+df_test$DIA_z <- as.numeric(df_test$DIA_z)
+df_test$HRT_z <- as.numeric(df_test$HRT_z)
+df_test$MNACT5_z <- as.numeric(df_test$MNACT5_z)
+df_test$PHASE <- factor(df_test$PHASE)
+df_test$DAY <- factor(df_test$DAY)
+df_test$POSTURE <- factor(df_test$POSTURE)
+df_test$STR <- factor(df_test$STR)
+df_test$HAP <- factor(df_test$HAP)
+df_test$TIR <-factor(df_test$TIR)
+df_test$AGE_z <- as.numeric(df_test$AGE_z)
+df_test$FH123 <-factor(df_test$FH123)
+df_test$time_z <- as.numeric(df_test$time_z)
+df_test$timepass_z <- as.numeric(df_test$timepass_z)
+df_test$timept <- factor(df_test$timept)
+```
+
+```{r}
+ggplot(df_test, aes(x = time_z, y = SYS, group = SNUM, color = as.factor(SNUM))) +
+  geom_line(alpha = 0.4) +
+  # Adding a trend line to see the 'average' minute-by-minute change
+  geom_smooth(aes(group = 1), method = "gam", color = "black", size = 1.2) +
+  labs(title = "SYS Change Over Minutes",
+       x = "Minutes (from midnight/baseline)",
+       y = "Systolic BP") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Spline GEE
+
+```{r}
+library(geepack)
+
+vars <- c("SYS", "time", "STR", "PHASE", "POSTURE", "HRT",
+          "AGE", "HAP", "TIR", "MNACT5", "DAY", "FH123", "SNUM")
+
+df_clean <- df_test[
+  complete.cases(df_test[, vars]),
+]
+
+# Convert problematic entries to NA first
+df_test$POSTURE[df_test$POSTURE %in% c("NA", "", " ")] <- NA
+
+# Then remove incomplete cases
+df_clean <- df_test[
+  complete.cases(df_test[, vars]),
+]
+
+# Drop unused levels
+df_clean$POSTURE <- droplevels(df_clean$POSTURE)
+
+# Create time knot
+df_clean$time_knot <- pmax(0, df_clean$time_z - 1)
+
+gee_piecewise_ar <- geeglm(
+  SYS ~ time_z + time_knot + HRT_z + FH123 + STR + PHASE +
+        POSTURE + AGE_z + HAP + TIR + MNACT5_z + DAY,
+  data = df_clean,
+  id = SNUM,
+  family = gaussian,
+  corstr = "ar1"
+)
+summary(gee_piecewise_ar)
+```
+
+```{r}
+# Extract fitted values and Pearson residuals
+fitted_vals <- predict(gee_piecewise_ar)
+resids <- residuals(gee_piecewise_ar, type = "pearson")
+
+# Create the plot
+my_colour <- adjustcolor("steelblue", alpha.f = 0.2)
+plot(fitted_vals, resids, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals",
+     main = "Residual vs. Fitted Plot (GEE)",
+     pch = 20, col = my_colour)
+abline(h = 0, lty = 2, col = "red") # Add a horizontal line at 0
+```
+
+## Model Comparison
+
+```{r}
+# Standard Linear Model (No Knot)
+gee_linear_ar <- geeglm(
+  SYS ~ time_z + HRT_z + FH123 + STR + PHASE + 
+        POSTURE + AGE_z + HAP + TIR + MNACT5_z + DAY,
+  data = df_clean, 
+  id = SNUM, 
+  family = gaussian, 
+  corstr = "ar1"
+)
+```
+
+```{r}
+# Piecewise Model with Exchangeable Correlation
+gee_piecewise_exch <- geeglm(
+  SYS ~ time_z + time_knot + HRT_z + FH123 + STR + PHASE + 
+        POSTURE + AGE_z + HAP + TIR + MNACT5_z + DAY,
+  data = df_clean, 
+  id = SNUM, 
+  family = gaussian, 
+  corstr = "exchangeable"
+)
+```
+
+```{r}
+# Standard Linear Model (No Knot)
+gee_linear_exch <- geeglm(
+  SYS ~ time_z + HRT_z + FH123 + STR + PHASE + 
+        POSTURE + AGE_z + HAP + TIR + MNACT5_z + DAY,
+  data = df_clean, 
+  id = SNUM, 
+  family = gaussian, 
+  corstr = "exchangeable"
+)
+```
+
+```{r}
+# 1. Fit the final winning model (Linear Exchangeable)
+gee_final <- geeglm(
+  SYS ~ time_z + HRT_z + FH123 + STR + PHASE + 
+        POSTURE + AGE_z + HAP + TIR + MNACT5_z + DAY + PHASE:POSTURE,
+  data = df_clean, 
+  id = SNUM, 
+  family = gaussian, 
+  corstr = "exchangeable"
+)
+
+summary(gee_final)
+```
+
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+
+# 1. Extract the required components from your GEE model
+df_clean$pearson_res <- residuals(gee_linear_exch, type = "pearson")
+all_coefs <- coef(gee_linear_exch)
+
+# 2. Function to generate a Partial Residual Plot
+plot_linearity <- function(var_name, title_label) {
+  # Calculate partial residuals: (Beta * X) + Residuals
+  beta_val <- all_coefs[var_name]
+  df_clean$partial_res <- (beta_val * df_clean[[var_name]]) + df_clean$pearson_res
+  
+  ggplot(df_clean, aes_string(x = var_name, y = "partial_res")) +
+    geom_point(alpha = 0.2, color = "grey70") +
+    # The 'Truth': Smoothed Loess line
+    geom_smooth(method = "loess", color = "blue", se = FALSE, size = 1) + 
+    # The 'Assumption': Your model's linear slope
+    geom_abline(intercept = 0, slope = beta_val, color = "red", linetype = "dashed", size = 1) +
+    labs(title = paste("Linearity Check:", title_label),
+         y = "Partial Residuals", x = var_name) +
+    theme_minimal()
+}
+
+# 3. Generate the plots
+p1 <- plot_linearity("time_z", "Time (std)")
+p2 <- plot_linearity("HRT_z", "Heart Rate (std)")
+p3 <- plot_linearity("AGE_z", "Age (std)")
+p4 <- plot_linearity("MNACT5_z", "Activity (std)")
+
+# 4. Display in a grid
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+```{r}
+compute_QIC <- function(model) {
+  # 1. Ensure we have the data and basic components
+  y <- model$y
+  mu <- model$fitted.values
+  n <- length(y)
+  
+  # 2. Calculate Quasi-Likelihood for Gaussian (Normal) family
+  # For Gaussian, Q is -0.5 * RSS (Residual Sum of Squares)
+  rss <- sum((y - mu)^2)
+  quasi_lik <- -0.5 * rss
+  
+  # 3. Fit an independence model to get the Inverse model-based covariance (AI)
+  # We use update() to ensure all other parameters stay the same
+  model_indep <- update(model, corstr = "independence")
+  
+  # 4. Extract Covariance Matrices
+  # Vr = Robust (sandwich) variance-covariance matrix
+  # Vi = Model-based variance-covariance matrix (under independence)
+  Vr <- model$geese$vbeta
+  Vi <- model_indep$geese$vbeta
+  
+  # 5. Calculate the Trace component
+  # solve(Vi) gives us the AI matrix
+  AI <- solve(Vi)
+  trace_val <- sum(diag(AI %*% Vr))
+  
+  # 6. Compute QIC and QICu
+  # QIC = -2Q + 2*trace
+  # QICu = -2Q + 2*p (where p is number of parameters)
+  p <- length(model$coefficients)
+  qic <- -2 * quasi_lik + 2 * trace_val
+  qicu <- -2 * quasi_lik + 2 * p
+  
+  return(data.frame(QIC = qic, QICu = qicu, Trace = trace_val, p = p))
+}
+```
+
+```{r}
+# Function to calculate Root Mean Square Error for GEE
+compute_rmse <- function(model) {
+  # For Gaussian GEE, we can use the difference between observed and predicted
+  preds <- predict(model)
+  obs <- model$y
+  rmse_val <- sqrt(mean((obs - preds)^2))
+  return(round(rmse_val, 3))
+}
+```
+
+```{r}
+# 1. Run the RMSE function for each model
+rmse1 <- compute_rmse(gee_piecewise_ar)
+rmse2 <- compute_rmse(gee_linear_ar)
+rmse3 <- compute_rmse(gee_piecewise_exch)
+rmse4 <- compute_rmse(gee_linear_exch)
+
+# 2. Collect the QIC values (assuming you used a QIC function)
+qic1 <- compute_QIC(gee_piecewise_ar)
+qic2 <- compute_QIC(gee_linear_ar)
+qic3 <- compute_QIC(gee_piecewise_exch)
+qic4 <- compute_QIC(gee_linear_exch)
+```
+
+
+```{r}
+library(knitr)
+library(kableExtra)
+
+model_results <- data.frame(
+  Model = c("Piecewise AR1", 
+            "Linear AR1", 
+            "Piecewise Exchange", 
+            "Linear Exchange"),
+  QIC = c(qic1$QIC, qic2$QIC, qic3$QIC, qic4$QIC),
+  RMSE = c(rmse1, rmse2, rmse3, rmse4), # Example values; plug in your results here
+  Parameters = c(
+    ncol(model.matrix(gee_piecewise_ar)) + length(gee_piecewise_ar$geese$alpha),
+    ncol(model.matrix(gee_linear_ar)) + length(gee_linear_ar$geese$alpha),
+    ncol(model.matrix(gee_piecewise_exch)) + length(gee_piecewise_exch$geese$alpha),
+    ncol(model.matrix(gee_linear_exch)) + length(gee_linear_exch$geese$alpha)
+  ))
+
+# 2. Format the table for your QMD/Presentation
+model_results %>%
+  kbl(caption = "Table 1: GEE Model Fit and Predictive Accuracy Metrics",
+      format = "html", 
+      align = "lccc",
+      col.names = c("Model Structure", "QIC", "RMSE (mmHg)", "No. Params")) %>%
+  kable_classic(full_width = F, html_font = "Arial") %>%
+  row_spec(1, bold = T, background = "lightblue") 
+```
+
