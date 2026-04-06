@@ -27,7 +27,7 @@ project-analysis/
 ├── scripts/
 
 ## Contributors
-- EDA: Sylvia Yin (with contributions from Eileen Yu and Jianyue (Evelyn) Bai)
+- EDA: Sylvia Yin (with additional plots contributed by Eileen Yu and Jianyue (Evelyn) Bai)
 - LME: Eileen Yu
 - GEE: Jianyue (Evelyn) Bai
 - GLS: Ente Kang
